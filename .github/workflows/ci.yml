@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['20.x', '22.x']
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      # Why `npm install` not `npm ci`: Stage 1 uses file: cross-repo
+      # dependencies (e.g. polygraph at file:../polygraph). npm ci is
+      # strict about package-lock.json and intolerant of non-registry
+      # sources; npm install handles file: refs correctly. CI is swapped
+      # to npm ci in Stage 7 once dependencies are published.
+      - name: Install dependencies
+        run: npm install
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      # Why build before test (cli-specific): tests/smoke.test.ts has an
+      # opt-in assertion that execs `node dist/cli.js --version`. The
+      # binary only exists after tsup runs. The smoke test is structured
+      # to skip when dist/cli.js is absent, so this ordering exercises
+      # the bin wiring in CI without breaking pre-build local `npm test`.
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm run test:coverage
