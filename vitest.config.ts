@@ -14,7 +14,13 @@ export default defineConfig({
         statements: 80,
       },
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts', 'src/index.ts'],
+      // Why: src/index.ts is just a VERSION export; src/cli.ts is a thin
+      // bin shim that runs as a subprocess (the smoke test execs the built
+      // dist/cli.js). Neither is meaningfully reachable from in-process
+      // coverage instrumentation at v0.1.0-pre, so both are excluded from
+      // the 80% gate. Stage 2 will reintroduce coverage for the real CLI
+      // command tree.
+      exclude: ['src/**/*.test.ts', 'src/index.ts', 'src/cli.ts'],
     },
   },
 });
