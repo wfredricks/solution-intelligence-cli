@@ -1,7 +1,7 @@
 {
   "name": "@solution-intelligence/cli",
-  "version": "0.1.0-pre",
-  "description": "The Solution Intelligence command-line interface — `si init`, `si add`, `si destroy`. Stage 1b scaffold.",
+  "version": "0.2.0-pre",
+  "description": "The Solution Intelligence command-line interface — `si login`, `si grant`, `si revoke`, and more. Stage 2b.",
   "author": "William Fredricks",
   "license": "Apache-2.0",
   "repository": {
@@ -47,6 +47,10 @@
     "format:check": "prettier --check src tests",
     "clean": "rm -rf dist coverage",
     "prepublishOnly": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "dependencies": {
+    "commander": "^12.0.0",
+    "yaml": "^2.6.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

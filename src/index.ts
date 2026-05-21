@@ -1,17 +1,39 @@
-// Why: This is the v0.1.0-pre scaffold for @solution-intelligence/cli.
-//      Product code will be added in build Stage 2 (the `si` command
-//      tree: init, add, destroy per REQ-SI-007). Until then, this
-//      module exports only its version so the toolchain can be
-//      verified end to end.
-
 /**
- * Package version.
+ * Public library exports for `@solution-intelligence/cli`.
  *
- * Why: Provides a single import-able symbol so Stage 1b's smoke test
- * has something real to assert against, and so the bin stub
- * (`src/cli.ts`) has a single source of truth for `si --version`.
- * Will be joined by real exports in Stage 2.
+ * // Why: The package primarily ships a bin (`si`), but the underlying
+ * // modules are exported for downstream tooling — most notably integration
+ * // tests that drive the commands programmatically rather than via the
+ * // shell. We re-export only what's stable; internal helpers stay private.
  *
- * @requirement REQ-SI-NF-052 (JSDoc on exported symbols)
+ * @module index
  */
-export const VERSION = '0.1.0-pre';
+
+export { VERSION } from './version.js';
+export {
+  loadCredentials,
+  saveCredentials,
+  getEntry,
+  setEntry,
+  clearEntry,
+  normalizeUrl,
+  credentialsDir,
+  credentialsPath,
+  type Credentials,
+  type CredentialEntry,
+} from './credentials.js';
+export { resolveUrl, findProjectConfig, type UrlResolution } from './url.js';
+export {
+  SIIdentityClient,
+  SIHttpError,
+  type GrantResponse,
+  type RevokeResponse,
+  type LoginRequestResponse,
+  type LoginVerifyResponse,
+  type ResolveResponse,
+  type HealthResponse,
+} from './http.js';
+export { promptText, promptEmail, promptCode, type PromptOptions } from './prompts.js';
+export { loginCommand, type LoginOptions } from './commands/login.js';
+export { grantCommand, type GrantOptions } from './commands/grant.js';
+export { revokeCommand, type RevokeOptions } from './commands/revoke.js';
