@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1-pre] — 2026-05-21
+
+Stage 2c deliverable. Pre-work for Stage 3 (Graph + GraphLoader). Two
+non-breaking refactors:
+
+### Added
+
+- **`resolveProjectConfig(flagUrl)`** — returns the full `.si/config.yaml`
+  record (`ProjectConfig`) plus a `urlSource` describing which precedence
+  rung won. Stage 3 will read `graphUrl`, `studioUrl`, etc. via this
+  surface.
+- **`ProjectConfig`** / **`ProjectConfigResolution`** types exported from
+  `src/index.ts`.
+- **`tests/_harness.ts`** — exposes `bootIdentityHarness()` and
+  `HarnessHandle`. Encapsulates the SI/I boot, HOME redirection, env
+  snapshot, random-port allocation, `/health` wait, and matching
+  teardown. Stage 3 integration tests can stand up SI/I with a single
+  call.
+
+### Changed
+
+- `src/url.ts` walk-up logic centralized in a private `readProjectConfig()`.
+  `resolveUrl()` is now a thin backward-compatible wrapper around
+  `resolveProjectConfig()` — same precedence (flag > env > config), same
+  `UrlResolution` shape, `configPath` surfaced only when the URL itself
+  came from a discovered config file.
+- `tests/integration.test.ts` `beforeAll`/`afterAll` reduce to a single
+  `bootIdentityHarness()` / `handle.stop()` pair; test bodies unchanged.
+
+### Verification
+
+- `npm test` passes 59 tests (52 unit/smoke + 7 integration).
+- Coverage: 96.26% statements / 86.84% branches / 100% functions on the
+  gated surface (above the 80/80/80/80 threshold).
+- CI green on Node 20.x and 22.x.
+- No behavioral changes to commands; no changes to SI/I.
+
 ## [0.2.0-pre] — 2026-05-20
 
 Stage 2b deliverable. Per `build-history/BUILD-STAGE-02B-PLAN.md` and

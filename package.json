@@ -1,7 +1,7 @@
 {
   "name": "@solution-intelligence/cli",
-  "version": "0.2.0-pre",
-  "description": "The Solution Intelligence command-line interface — `si login`, `si grant`, `si revoke`, and more. Stage 2b.",
+  "version": "0.2.1-pre",
+  "description": "The Solution Intelligence command-line interface — `si login`, `si grant`, `si revoke`, and more. Stage 2c.",
   "author": "William Fredricks",
   "license": "Apache-2.0",
   "repository": {
