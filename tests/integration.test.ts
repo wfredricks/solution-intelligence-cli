@@ -9,28 +9,16 @@
  * // ledger shows the new row, then the revoke row). If this test passes,
  * // Stage 2's user-visible deliverable works end-to-end.
  *
- * Setup:
- *   - Builds `../identity` if `dist/server.js` is missing.
- *   - Spawns the server with `SI_DEV_CODE=123456` so we can hand the code
- *     to the CLI without scraping email-adapter output.
- *   - Redirects HOME to a tmp dir so the test never touches the real
- *     `~/.si/`.
- *   - Points SI_GRANTS_PATH + SI_AUDIT_PATH at the tmp dir.
+ * // Why a shared harness (Stage 2c refactor): the boot/teardown plumbing
+ * // moved into tests/_harness.ts so Stage 3's additional integration
+ * // tests can stand up SI/I without duplicating ~60 lines of setup.
+ * // Behavioral assertions in this file are unchanged.
  */
 
-import {
-  describe,
-  it,
-  expect,
-  beforeAll,
-  afterAll,
-} from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 
 import { loginCommand } from '../src/commands/login.js';
@@ -41,135 +29,16 @@ import {
   loadCredentials,
   type CredentialEntry,
 } from '../src/credentials.js';
+import { bootIdentityHarness, type HarnessHandle } from './_harness.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const cliRoot = path.resolve(__dirname, '..');
-const identityRoot = path.resolve(cliRoot, '..', 'identity');
-
-let serverProc: ChildProcess | undefined;
-let serverPort = 0;
-let baseUrl = '';
-let tmpHome = '';
-let tmpData = '';
-let originalHome: string | undefined;
-let originalGrantsPath: string | undefined;
-let originalAuditPath: string | undefined;
-let originalDevCode: string | undefined;
-let originalSiUrl: string | undefined;
-
-async function waitForHealth(url: string, timeoutMs = 10_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let lastErr: unknown;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`${url}/health`);
-      if (res.ok) return;
-    } catch (e) {
-      lastErr = e;
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  throw new Error(
-    `Server at ${url} never became healthy: ${(lastErr as Error)?.message ?? 'no error'}`,
-  );
-}
+let harness: HarnessHandle;
 
 beforeAll(async () => {
-  // Snapshot env so we can fully restore it; afterAll mutates it back.
-  originalHome = process.env.HOME;
-  originalGrantsPath = process.env.SI_GRANTS_PATH;
-  originalAuditPath = process.env.SI_AUDIT_PATH;
-  originalDevCode = process.env.SI_DEV_CODE;
-  originalSiUrl = process.env.SI_URL;
-
-  // Tmp HOME so ~/.si/credentials lives somewhere disposable.
-  tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), 'si-cli-int-home-'));
-  process.env.HOME = tmpHome;
-  // Tmp data dir for the server's grants + audit jsonl.
-  tmpData = await fs.mkdtemp(path.join(os.tmpdir(), 'si-cli-int-data-'));
-
-  // Server-side env. The identity service reads these at boot.
-  const grantsPath = path.join(tmpData, 'grants.jsonl');
-  const auditPath = path.join(tmpData, 'audit.jsonl');
-
-  // Build identity if its dist is missing.
-  const identityDist = path.join(identityRoot, 'dist', 'server.js');
-  if (!existsSync(identityDist)) {
-    const build = spawnSync('npm', ['run', 'build'], {
-      cwd: identityRoot,
-      stdio: 'inherit',
-    });
-    if (build.status !== 0) {
-      throw new Error('Failed to build identity dist');
-    }
-  }
-
-  // Pick a free port by binding to 0 via a throwaway socket. Simpler:
-  // ask the OS for one via Node's net module.
-  serverPort = await new Promise<number>((resolve, reject) => {
-    import('node:net').then((net) => {
-      const srv = net.createServer();
-      srv.listen(0, () => {
-        const addr = srv.address();
-        if (typeof addr === 'object' && addr !== null) {
-          const p = addr.port;
-          srv.close(() => resolve(p));
-        } else {
-          srv.close(() => reject(new Error('No port returned')));
-        }
-      });
-    });
-  });
-  baseUrl = `http://127.0.0.1:${serverPort}`;
-
-  // Why: We don't carry SI_URL into the server process; the CLI uses --url.
-  // Unset it so resolveUrl doesn't pick up a stray dev value.
-  delete process.env.SI_URL;
-
-  serverProc = spawn('node', [identityDist], {
-    cwd: identityRoot,
-    env: {
-      ...process.env,
-      SI_PORT: String(serverPort),
-      SI_DEV_CODE: '123456',
-      SI_ALLOWED_DOMAINS: '*',
-      SI_PROJECT_ID: 'p-integration',
-      SI_GRANTS_PATH: grantsPath,
-      SI_AUDIT_PATH: auditPath,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  // Forward server output to test-runner stderr for diagnostics on failure.
-  serverProc.stdout?.on('data', () => {
-    /* swallow normal stdout; readable below if a test fails */
-  });
-  serverProc.stderr?.on('data', (buf: Buffer) => {
-    process.stderr.write(`[si-identity] ${buf.toString('utf-8')}`);
-  });
-
-  await waitForHealth(baseUrl);
+  harness = await bootIdentityHarness();
 }, 60_000);
 
 afterAll(async () => {
-  if (serverProc && !serverProc.killed) {
-    serverProc.kill('SIGTERM');
-    await new Promise((r) => setTimeout(r, 200));
-    if (!serverProc.killed) serverProc.kill('SIGKILL');
-  }
-  // Restore env
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
-  if (originalGrantsPath === undefined) delete process.env.SI_GRANTS_PATH;
-  else process.env.SI_GRANTS_PATH = originalGrantsPath;
-  if (originalAuditPath === undefined) delete process.env.SI_AUDIT_PATH;
-  else process.env.SI_AUDIT_PATH = originalAuditPath;
-  if (originalDevCode === undefined) delete process.env.SI_DEV_CODE;
-  else process.env.SI_DEV_CODE = originalDevCode;
-  if (originalSiUrl === undefined) delete process.env.SI_URL;
-  else process.env.SI_URL = originalSiUrl;
-
-  await fs.rm(tmpHome, { recursive: true, force: true });
-  await fs.rm(tmpData, { recursive: true, force: true });
+  await harness.stop();
 });
 
 // Helper: invoke a command function with stdin/stdout passthroughs so it
@@ -199,7 +68,7 @@ describe('CLI integration (Stage 2b)', () => {
     const { code } = await runCommandWithCapture(
       (s) =>
         loginCommand({
-          url: baseUrl,
+          url: harness.baseUrl,
           emailOverride: 'alice@example.com',
           input: s.input,
           output: s.output,
@@ -214,7 +83,7 @@ describe('CLI integration (Stage 2b)', () => {
     expect(stat.mode & 0o777).toBe(0o600);
 
     const creds = await loadCredentials();
-    const entry = creds[baseUrl] as CredentialEntry | undefined;
+    const entry = creds[harness.baseUrl] as CredentialEntry | undefined;
     expect(entry).toBeDefined();
     expect(entry!.email).toBe('alice@example.com');
     expect(entry!.token.length).toBeGreaterThan(0);
@@ -231,7 +100,7 @@ describe('CLI integration (Stage 2b)', () => {
     const { code } = await runCommandWithCapture(
       (s) =>
         loginCommand({
-          url: baseUrl,
+          url: harness.baseUrl,
           emailOverride: 'root@example.com',
           input: s.input,
           output: s.output,
@@ -240,14 +109,14 @@ describe('CLI integration (Stage 2b)', () => {
     );
     expect(code).toBe(0);
     const creds = await loadCredentials();
-    expect(creds[baseUrl]!.email).toBe('root@example.com');
+    expect(creds[harness.baseUrl]!.email).toBe('root@example.com');
     // alice token is no longer in the credentials file, but we kept a copy.
     expect(aliceToken.length).toBeGreaterThan(0);
   });
 
   it('si grant (root grants alice Operator on p-integration)', async () => {
     const code = await grantCommand({
-      url: baseUrl,
+      url: harness.baseUrl,
       project: 'p-integration',
       user: 'alice@example.com',
       role: 'Operator',
@@ -255,7 +124,7 @@ describe('CLI integration (Stage 2b)', () => {
     expect(code).toBe(0);
 
     // Verify the server-side ledger has the new row.
-    const res = await fetch(`${baseUrl}/grants?projectId=p-integration`);
+    const res = await fetch(`${harness.baseUrl}/grants?projectId=p-integration`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       grants: Array<{
@@ -273,7 +142,7 @@ describe('CLI integration (Stage 2b)', () => {
     );
     expect(operatorRow).toBeDefined();
     expect(operatorRow!.grantedBy).toBe('root@example.com');
-    // Why: The audit block seq must be present — that's the chainblocks
+    // Why: The audit block seq must be present — that is the chainblocks
     // emission Stage 2's exit gate requires.
     expect(typeof operatorRow!.auditBlock).toBe('number');
     rootGrantId = operatorRow!.grantId;
@@ -281,7 +150,7 @@ describe('CLI integration (Stage 2b)', () => {
 
   it('alice token resolves to include Operator role', async () => {
     // Why: Verifies the grant was visible end-to-end via /resolve.
-    const res = await fetch(`${baseUrl}/resolve`, {
+    const res = await fetch(`${harness.baseUrl}/resolve`, {
       method: 'POST',
       headers: { authorization: `Bearer ${aliceToken}` },
     });
@@ -296,14 +165,14 @@ describe('CLI integration (Stage 2b)', () => {
 
   it('si revoke removes the grant and emits an audit event', async () => {
     const code = await revokeCommand({
-      url: baseUrl,
+      url: harness.baseUrl,
       project: 'p-integration',
       grantId: rootGrantId,
     });
     expect(code).toBe(0);
 
     // Server-side: the grants ledger now has a revoked: true counterpart.
-    const res = await fetch(`${baseUrl}/grants?projectId=p-integration`);
+    const res = await fetch(`${harness.baseUrl}/grants?projectId=p-integration`);
     const body = (await res.json()) as {
       grants: Array<{ grantId: string; revoked?: boolean; auditBlock?: number }>;
     };
@@ -315,7 +184,7 @@ describe('CLI integration (Stage 2b)', () => {
   });
 
   it('alice token resolves with Operator gone after revoke', async () => {
-    const res = await fetch(`${baseUrl}/resolve`, {
+    const res = await fetch(`${harness.baseUrl}/resolve`, {
       method: 'POST',
       headers: { authorization: `Bearer ${aliceToken}` },
     });
@@ -326,9 +195,9 @@ describe('CLI integration (Stage 2b)', () => {
   it('audit ledger contains both granted and revoked events for the grant', async () => {
     // Why: The integration test sets SI_AUDIT_PATH so the chainblocks
     // fallback writes a JSONL file we can read directly. We assert by
-    // grant id rather than by sequence so the order-of-tests doesn't
+    // grant id rather than by sequence so the order-of-tests does not
     // bite if a future revision adds new auxiliary events.
-    const auditPath = path.join(tmpData, 'audit.jsonl');
+    const auditPath = path.join(harness.tmpData, 'audit.jsonl');
     expect(existsSync(auditPath)).toBe(true);
     const raw = await fs.readFile(auditPath, 'utf-8');
     const lines = raw.split('\n').filter((l) => l.trim().length > 0);

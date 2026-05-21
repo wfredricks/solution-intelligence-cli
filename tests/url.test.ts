@@ -12,7 +12,11 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-import { resolveUrl, findProjectConfig } from '../src/url.js';
+import {
+  resolveUrl,
+  resolveProjectConfig,
+  findProjectConfig,
+} from '../src/url.js';
 
 let originalEnv: string | undefined;
 let originalCwd: string;
@@ -42,6 +46,22 @@ async function writeConfig(dir: string, url: string | null): Promise<string> {
   await fs.mkdir(cfgDir, { recursive: true });
   const body =
     url === null ? 'unrelated: { key: value }\n' : `si:\n  url: ${url}\n`;
+  const cfgPath = path.join(cfgDir, 'config.yaml');
+  await fs.writeFile(cfgPath, body);
+  return cfgPath;
+}
+
+/**
+ * Write a `.si/config.yaml` with a custom YAML body.
+ *
+ * // Why: The Stage 2c tests need configs with multiple keys under `si:`
+ * // (e.g. `si.url` AND `si.graphUrl`) to verify that `resolveProjectConfig`
+ * // surfaces the full block. `writeConfig` above only produces the
+ * // single-key shape.
+ */
+async function writeConfigRaw(dir: string, body: string): Promise<string> {
+  const cfgDir = path.join(dir, '.si');
+  await fs.mkdir(cfgDir, { recursive: true });
   const cfgPath = path.join(cfgDir, 'config.yaml');
   await fs.writeFile(cfgPath, body);
   return cfgPath;
@@ -139,5 +159,117 @@ describe('findProjectConfig walk-up', () => {
     await fs.mkdir(cfgDir, { recursive: true });
     await fs.writeFile(path.join(cfgDir, 'config.yaml'), 'si:\n  url: [unterminated\n');
     await expect(findProjectConfig(tmp)).rejects.toThrow(/Failed to parse/);
+  });
+});
+
+describe('resolveProjectConfig (Stage 2c)', () => {
+  it('returns the full si: block when the config has multiple keys', async () => {
+    await writeConfigRaw(
+      tmp,
+      'si:\n  url: http://from-config:1\n  graphUrl: http://graph:2\n  studioUrl: http://studio:3\n',
+    );
+    process.chdir(tmp);
+    const out = await resolveProjectConfig();
+    expect(out.urlSource).toBe('config');
+    expect(out.config.si.url).toBe('http://from-config:1');
+    expect(out.config.si.graphUrl).toBe('http://graph:2');
+    expect(out.config.si.studioUrl).toBe('http://studio:3');
+    // path is set because the URL came from the discovered config file.
+    const realRoot = process.cwd();
+    expect(out.config.path).toBe(path.join(realRoot, '.si', 'config.yaml'));
+  });
+
+  it('returns empty si: {} when no config file is found and no flag/env supplied', async () => {
+    process.chdir(tmp);
+    const out = await resolveProjectConfig();
+    expect(out).toEqual({ config: { si: {} }, urlSource: 'none' });
+  });
+
+  it('urlSource respects flag > env > config precedence', async () => {
+    process.env.SI_URL = 'http://from-env:1';
+    await writeConfig(tmp, 'http://from-config:1');
+    process.chdir(tmp);
+
+    // flag wins over env + config
+    const withFlag = await resolveProjectConfig('http://from-flag:1');
+    expect(withFlag.urlSource).toBe('flag');
+    expect(withFlag.config.si.url).toBe('http://from-flag:1');
+
+    // env wins over config when no flag
+    const withEnv = await resolveProjectConfig();
+    expect(withEnv.urlSource).toBe('env');
+    expect(withEnv.config.si.url).toBe('http://from-env:1');
+
+    // config wins when no flag, no env
+    delete process.env.SI_URL;
+    const withConfig = await resolveProjectConfig();
+    expect(withConfig.urlSource).toBe('config');
+    expect(withConfig.config.si.url).toBe('http://from-config:1');
+  });
+
+  it('preserves non-URL si: keys when flag overrides the URL', async () => {
+    // Why: Stage 3 will read graphUrl/studioUrl from the config even when
+    // the URL itself comes from --url. The on-disk graphUrl must survive
+    // the flag override.
+    await writeConfigRaw(
+      tmp,
+      'si:\n  url: http://from-config:1\n  graphUrl: http://graph:2\n',
+    );
+    process.chdir(tmp);
+    const out = await resolveProjectConfig('http://from-flag:1');
+    expect(out.urlSource).toBe('flag');
+    expect(out.config.si.url).toBe('http://from-flag:1');
+    expect(out.config.si.graphUrl).toBe('http://graph:2');
+    // path is still set because the file was discovered, even though the
+    // URL did not come from it.
+    const realRoot = process.cwd();
+    expect(out.config.path).toBe(path.join(realRoot, '.si', 'config.yaml'));
+  });
+
+  it('config.path is undefined when no config file is found', async () => {
+    process.env.SI_URL = 'http://from-env:1';
+    process.chdir(tmp);
+    const out = await resolveProjectConfig();
+    expect(out.urlSource).toBe('env');
+    expect(out.config.si.url).toBe('http://from-env:1');
+    expect(out.config.path).toBeUndefined();
+  });
+
+  it('whitespace-only url in config is treated as unset', async () => {
+    // Why: matches the existing resolveUrl behavior of ignoring blank URLs.
+    // The walk-up should fall through to a parent config rather than
+    // locking in an empty string.
+    await writeConfig(tmp, 'http://parent');
+    const childDir = path.join(tmp, 'child');
+    await fs.mkdir(childDir);
+    await writeConfigRaw(childDir, 'si:\n  url: "   "\n');
+    process.chdir(childDir);
+    const out = await resolveProjectConfig();
+    expect(out.urlSource).toBe('config');
+    expect(out.config.si.url).toBe('http://parent');
+  });
+});
+
+describe('resolveUrl wrapper backward-compat (Stage 2c)', () => {
+  it('configPath is only set when the URL came from the config file', async () => {
+    // Why: Pre-Stage-2c, configPath was the URL's provenance, not a
+    // generic "a config file existed somewhere" hint. When the flag wins,
+    // configPath must be undefined even if a config file exists.
+    process.env.SI_URL = 'http://from-env:1';
+    await writeConfig(tmp, 'http://from-config:1');
+    process.chdir(tmp);
+
+    const fromFlag = await resolveUrl('http://from-flag:1');
+    expect(fromFlag.source).toBe('flag');
+    expect(fromFlag.configPath).toBeUndefined();
+
+    const fromEnv = await resolveUrl();
+    expect(fromEnv.source).toBe('env');
+    expect(fromEnv.configPath).toBeUndefined();
+
+    delete process.env.SI_URL;
+    const fromConfig = await resolveUrl();
+    expect(fromConfig.source).toBe('config');
+    expect(fromConfig.configPath).toBeDefined();
   });
 });

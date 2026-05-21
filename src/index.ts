@@ -22,7 +22,14 @@ export {
   type Credentials,
   type CredentialEntry,
 } from './credentials.js';
-export { resolveUrl, findProjectConfig, type UrlResolution } from './url.js';
+export {
+  resolveUrl,
+  resolveProjectConfig,
+  findProjectConfig,
+  type UrlResolution,
+  type ProjectConfig,
+  type ProjectConfigResolution,
+} from './url.js';
 export {
   SIIdentityClient,
   SIHttpError,
