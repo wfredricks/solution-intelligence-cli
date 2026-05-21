@@ -14,7 +14,20 @@ jobs:
       matrix:
         node-version: ['20.x', '22.x']
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout cli
+        uses: actions/checkout@v4
+        with:
+          path: cli
+      # Why: Stage 2b integration test boots a real SI/I server from
+      # `../identity/dist/server.js`. We check the identity repo out as a
+      # sibling directory at the SAME relative layout that the local
+      # `si-runtime/{cli,identity}` workspace uses, then build it.
+      - name: Checkout identity
+        uses: actions/checkout@v4
+        with:
+          repository: wfredricks/solution-intelligence-identity
+          ref: main
+          path: identity
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
@@ -24,11 +37,20 @@ jobs:
       # strict about package-lock.json and intolerant of non-registry
       # sources; npm install handles file: refs correctly. CI is swapped
       # to npm ci in Stage 7 once dependencies are published.
-      - name: Install dependencies
+      - name: Install identity dependencies
+        working-directory: identity
+        run: npm install
+      - name: Build identity
+        working-directory: identity
+        run: npm run build
+      - name: Install cli dependencies
+        working-directory: cli
         run: npm install
       - name: Lint
+        working-directory: cli
         run: npm run lint
       - name: Typecheck
+        working-directory: cli
         run: npm run typecheck
       # Why build before test (cli-specific): tests/smoke.test.ts has an
       # opt-in assertion that execs `node dist/cli.js --version`. The
@@ -36,6 +58,8 @@ jobs:
       # to skip when dist/cli.js is absent, so this ordering exercises
       # the bin wiring in CI without breaking pre-build local `npm test`.
       - name: Build
+        working-directory: cli
         run: npm run build
       - name: Test
+        working-directory: cli
         run: npm run test:coverage
